@@ -208,7 +208,9 @@ impl WorkerStatsBatcher {
             .busy_duration_total
             .store(self.busy_duration_total, Relaxed);
 
-        worker.local_schedule_count.store(self.local_schedule_count, Relaxed);
+        worker
+            .local_schedule_count
+            .store(self.local_schedule_count, Relaxed);
         worker.overflow_count.store(self.overflow_count, Relaxed);
     }
 

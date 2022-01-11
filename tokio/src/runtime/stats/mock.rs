@@ -8,8 +8,7 @@ impl RuntimeStats {
     }
 
     /// Increment the number of tasks scheduled externally
-    pub(crate) fn inc_remote_schedule_count(&self) {
-    }
+    pub(crate) fn inc_remote_schedule_count(&self) {}
 
     pub(crate) fn worker(&self, _index: usize) -> &WorkerStats {
         &WorkerStats {}
