@@ -445,7 +445,7 @@ impl Context {
                 } else {
                     // Not enough budget left to run the LIFO task, push it to
                     // the back of the queue and return.
-                    core.run_queue.push_back(task, self.worker.inject());
+                    core.run_queue.push_back(task, self.worker.inject(), &mut core.stats);
                     return Ok(core);
                 }
             }
@@ -557,9 +557,10 @@ impl Core {
             }
 
             let target = &worker.shared.remotes[i];
+            let target_stats = worker.shared.stats.worker(i);
             if let Some(task) = target
                 .steal
-                .steal_into(&mut self.run_queue, &mut self.stats)
+                .steal_into(&mut self.run_queue, &mut self.stats, target_stats)
             {
                 return Some(task);
             }
@@ -731,7 +732,7 @@ impl Shared {
         // tasks to be executed. If **not** a yield, then there is more
         // flexibility and the task may go to the front of the queue.
         let should_notify = if is_yield {
-            core.run_queue.push_back(task, &self.inject);
+            core.run_queue.push_back(task, &self.inject, &mut core.stats);
             true
         } else {
             // Push to the LIFO slot
@@ -739,7 +740,7 @@ impl Shared {
             let ret = prev.is_some();
 
             if let Some(prev) = prev {
-                core.run_queue.push_back(prev, &self.inject);
+                core.run_queue.push_back(prev, &self.inject, &mut core.stats);
             }
 
             core.lifo_slot = Some(task);

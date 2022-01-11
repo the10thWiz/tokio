@@ -29,12 +29,29 @@ pub struct RuntimeStats {
 #[derive(Debug)]
 #[repr(align(128))]
 pub struct WorkerStats {
+    ///  Number of times the worker parked.
     park_count: AtomicU64,
+
+    /// Number of times the worker woke then parked again without doing work.
     noop_count: AtomicU64,
+
+    /// Number of times the worker attempted to steal.
     steal_count: AtomicU64,
+
+    /// Number of tasks the worker polled.
     poll_count: AtomicU64,
+
+    /// Number of tasks stolen from the current worker.
+    stolen_count: AtomicU64,
+
+    /// Amount of time the worker spent doing work vs. parking.
     busy_duration_total: AtomicU64,
+
+    /// Number of tasks scheduled for execution on the worker's local queue.
     local_schedule_count: AtomicU64,
+
+    /// Number of tasks moved from the local queue to the global queue to free space.
+    overflow_count: AtomicU64,
 }
 
 impl RuntimeStats {
@@ -46,6 +63,8 @@ impl RuntimeStats {
                 noop_count: AtomicU64::new(0),
                 steal_count: AtomicU64::new(0),
                 poll_count: AtomicU64::new(0),
+                stolen_count: AtomicU64::new(0),
+                overflow_count: AtomicU64::new(0),
                 busy_duration_total: AtomicU64::new(0),
                 local_schedule_count: AtomicU64::new(0),
             });
@@ -73,7 +92,11 @@ impl RuntimeStats {
     /// Increment the number of tasks scheduled externally
     pub(crate) fn inc_remote_schedule_count(&self) {
         self.remote_schedule_count.fetch_add(1, Relaxed);
-    }    
+    }
+
+    pub(crate) fn worker(&self, index: usize) -> &WorkerStats {
+        &self.workers[index]
+    }
 }
 
 impl WorkerStats {
@@ -82,6 +105,9 @@ impl WorkerStats {
         self.park_count.load(Relaxed)
     }
 
+    /// Returns the number of times this worker unparked but performed no work.
+    ///
+    /// This is the false-positive wake count.
     pub fn noop_count(&self) -> u64 {
         self.noop_count.load(Relaxed)
     }
@@ -90,6 +116,11 @@ impl WorkerStats {
     /// threads.
     pub fn steal_count(&self) -> u64 {
         self.steal_count.load(Relaxed)
+    }
+
+    /// Returns the number of tasks that were stolen from this worker.
+    pub fn stolen_count(&self) -> u64 {
+        self.stolen_count.load(Relaxed)
     }
 
     /// Returns the number of times this worker has polled a task.
@@ -106,9 +137,20 @@ impl WorkerStats {
     pub fn local_schedule_count(&self) -> u64 {
         self.local_schedule_count.load(Relaxed)
     }
+
+    /// Returns the number of tasks moved from this worker's local queue to the
+    /// remote queue.
+    pub fn overflow_count(&self) -> u64 {
+        self.overflow_count.load(Relaxed)
+    }
+
+    pub(crate) fn incr_stolen_count(&self, n: u16) {
+        self.stolen_count.fetch_add(n as _, Relaxed);
+    }
 }
 
 pub(crate) struct WorkerStatsBatcher {
+    /// Identifies the worker within the runtime.
     my_index: usize,
 
     /// Number of times the worker parked
@@ -130,6 +172,10 @@ pub(crate) struct WorkerStatsBatcher {
     /// Number of tasks that were scheduled locally on this worker.
     local_schedule_count: u64,
 
+    /// Number of tasks moved to the global queue to make space in the local
+    /// queue
+    overflow_count: u64,
+
     /// The total busy duration in nanoseconds.
     busy_duration_total: u64,
     last_resume_time: Instant,
@@ -145,6 +191,7 @@ impl WorkerStatsBatcher {
             poll_count: 0,
             poll_count_on_last_park: 0,
             local_schedule_count: 0,
+            overflow_count: 0,
             busy_duration_total: 0,
             last_resume_time: Instant::now(),
         }
@@ -162,6 +209,7 @@ impl WorkerStatsBatcher {
             .store(self.busy_duration_total, Relaxed);
 
         worker.local_schedule_count.store(self.local_schedule_count, Relaxed);
+        worker.overflow_count.store(self.overflow_count, Relaxed);
     }
 
     /// The worker is about to park.
@@ -187,12 +235,19 @@ impl WorkerStatsBatcher {
         self.local_schedule_count += 1;
     }
 
-    #[cfg(feature = "rt-multi-thread")]
-    pub(crate) fn incr_steal_count(&mut self, by: u16) {
-        self.steal_count += u64::from(by);
-    }
-
     pub(crate) fn incr_poll_count(&mut self) {
         self.poll_count += 1;
+    }
+}
+
+cfg_rt_multi_thread! {
+    impl WorkerStatsBatcher {
+        pub(crate) fn incr_steal_count(&mut self, by: u16) {
+            self.steal_count += by as u64;
+        }
+
+        pub(crate) fn incr_overflow_count(&mut self, by: u16) {
+            self.overflow_count += by as u64;
+        }
     }
 }
